@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"os"
 )
 
@@ -21,6 +22,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	log.Println("DONE!!!")
 }
 
 func IsDirSeparator(r rune) bool {

@@ -55,7 +55,7 @@ func (client bookStackClient) UploadAttachment(pageID int, name string, path str
 		return nil, fmt.Errorf("failed to create new form part: %w", err)
 	}
 
-	fmt.Fprintf(nameField, "%s", fd.Name())
+	fmt.Fprintf(nameField, "%s", name)
 
 	err = mw.Close()
 	if err != nil {

@@ -47,6 +47,19 @@ func (client bookStackClient) CreatePage(chapterID int, name string, content []b
 	}
 	return resp.Result().(*page), nil
 }
+func (client bookStackClient) CreateBookPage(bookID int, name string, content []byte) (*page, error) {
+	resp, err := client.R().
+		SetBody(page{
+			BookID:   bookID,
+			Name:     name,
+			Markdown: string(content)}).
+		SetResult(page{}).
+		Post("/api/pages")
+	if err != nil || resp.StatusCode() > 399 {
+		return nil, fmt.Errorf("create page: %s", resp)
+	}
+	return resp.Result().(*page), nil
+}
 
 type pageContentRequest struct {
 	Markdown string `json:"markdown"`

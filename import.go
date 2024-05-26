@@ -5,7 +5,9 @@ import (
 	"io/fs"
 	"io/ioutil"
 	"log"
+	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	cache "github.com/Code-Hex/go-generics-cache"
@@ -129,6 +131,33 @@ func (imp *bookstackImport) GetPage(name string, chapterID int, content []byte) 
 	return page
 }
 
+func (imp *bookstackImport) GetBookPage(name string, bookID int, content []byte) *page {
+	page := &page{
+		BookID: bookID,
+		Name:   name,
+	}
+
+	existingPage, ok := imp.Pages.Get(page.String())
+	if !ok {
+		log.Println("Creating new page", name)
+		newPage, err := imp.Client.CreateBookPage(bookID, name, content)
+		if err != nil {
+			return nil
+		}
+
+		imp.Pages.Set(newPage.String(), newPage)
+		return newPage
+	}
+
+	page, err := imp.Client.UpdatePageContent(existingPage.ID, content)
+	if err != nil {
+		log.Printf("could not update page %d: %s\n", existingPage.ID, err)
+		return nil
+	}
+	imp.Pages.Set(page.String(), page)
+	return page
+}
+
 func (imp *bookstackImport) ImportFolder(importPath string) error {
 	return filepath.WalkDir(importPath, func(fullPath string, info fs.DirEntry, err error) error {
 		if err != nil {
@@ -148,17 +177,27 @@ func (imp *bookstackImport) ImportFolder(importPath string) error {
 
 		path := fullPath[len(importPath)+1:]
 		segments := strings.FieldsFunc(path, IsDirSeparator)
+		log.Println("Importing", path,
+			"with segments", len(segments), segments,
+			"Book:", segments[0],
+			"Chapter:", segments[1],
+			"Page:", strings.Join(segments[2:], "/"))
 
 		book := imp.GetBook(segments[0])
-		chapter := imp.GetChapter(segments[1], book.ID)
-		pageName := strings.Join(segments[2:], "/")
+		chapter := imp.GetChapter(ToNameCase(segments[1]), book.ID)
+		pageName := ToNameCase(strings.TrimRight(strings.Join(segments[2:], "/"), ".md"))
+		// // if page name is empty due to no sub directories, just use the file name
+		// if len(pageName) == 0 {
+		// 	pageName = filepath.Base(fullPath)
+		// }
 
 		content, err := ioutil.ReadFile(fullPath)
 		if err != nil {
 			return err
 		}
-
+		log.Println("Importing page", pageName, "for chapter", chapter.ID, "in book", book.ID)
 		page := imp.GetPage(pageName, chapter.ID, content)
+		// log.Println("Imported page", page.ID, "for chapter", chapter.ID, "in book", book.ID)
 		content, err = imp.ReplaceAllImages(page.ID, content, fullPath)
 		if err != nil {
 			return err
@@ -177,9 +216,14 @@ func (imp *bookstackImport) ImportFolder(importPath string) error {
 }
 
 func (imp *bookstackImport) ReplaceAllImages(pageID int, content []byte, path string) ([]byte, error) {
+	log.Println("Starting replace images loop")
 	for i := 0; i < len(content); i++ {
 		if content[i] != '!' {
 			continue
+		}
+
+		if i+1 >= len(content) {
+			break
 		}
 
 		bracketStart, bracketEnd := FindNext(content, i+1, '[', ']')
@@ -193,12 +237,28 @@ func (imp *bookstackImport) ReplaceAllImages(pageID int, content []byte, path st
 		}
 
 		name := content[bracketStart+1 : bracketEnd]
+		// if name is empty just give a generic name
+		if len(name) == 0 {
+			name = []byte(fmt.Sprintf("attachment_%d", i))
+		}
 		src := content[parenthesisStart+1 : parenthesisEnd]
-		path := filepath.Join(filepath.Dir(path), string(src))
+
+		decodedSrc, err := url.QueryUnescape(string(src))
+		if err != nil {
+			return nil, err
+		}
+		// if src starts with http, just skip it
+		if strings.HasPrefix(decodedSrc, "http") {
+			continue
+		}
+
+		path := filepath.Join(filepath.Dir(path), decodedSrc)
+		log.Println("Uploading attachment", string(name), ", from", path, "for page", pageID)
 		attachment, err := imp.Client.UploadAttachment(pageID, string(name), path)
 		if err != nil {
 			return nil, err
 		}
+		log.Println("Uploaded attachment", attachment.ID, "for page", pageID, "with name", string(name), "and path", path)
 
 		src = []byte(fmt.Sprintf("/attachments/%d", attachment.ID))
 		contentTail := content[parenthesisEnd+1:]
@@ -289,4 +349,13 @@ func FindNextMultiChar(content []byte, start int, chars ...byte) int {
 		}
 	}
 	return -1
+}
+
+func ToNameCase(s string) string {
+	re, _ := regexp.Compile(`[-_]`)
+	res := re.ReplaceAllStringFunc(s, func(m string) string {
+		return (" ")
+	})
+	res = strings.ToUpper(res[:1]) + res[1:]
+	return res
 }
